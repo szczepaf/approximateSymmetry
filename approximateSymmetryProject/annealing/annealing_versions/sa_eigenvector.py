@@ -1,17 +1,12 @@
-#!/bin/env python3
-# pylint: disable=C0111 # missing function docstring
-# pylint: disable=C0103 # UPPER case
-
 import random, numpy as np
-from annealer import Annealer
+from annealing_versions.annealer import Annealer
 import networkx as nx
 
 class SymmetryAproximator(Annealer):
-    def __init__(self, state, A, B, mfp, division_constant, probability_constant):
+    def __init__(self, state, A, B, mfp, centrality):
         self.N, self.mfp, self.lfp, self.fp = A.shape[0], mfp, 0, 0
         self.A = self.B = A
-        self.division_constant = division_constant
-        self.probability_constant = probability_constant
+        self.centrality = centrality
         if B is not None:
             self.B = B
         self.iNeighbor, self.dNeighbor = [], [set() for _ in range(self.N)]
@@ -29,25 +24,57 @@ class SymmetryAproximator(Annealer):
                     neigh.append(j)
                     self.dNeighbor[s].add(state[j])
                     
+        
+        # A dictionary of optimal constants used for annealing guided by different centralities
+        # The keys are the names of the centralities, the values are tuples of the form (division_constant, probability_constant)
+        self.constants_for_centralities = {
+                'degree': (1, 0.01), #TODO: tune this + complex
+                'closeness': (1, 0.01),
+                'eigenvector': (1, 0.01),
+                'betweenness': (1, 0.01),
+                'pagerank': (1, 0.01),
+                'clustering': (1, 0.01),
+                }
 
-        self.similarity_matrix = self.compute_similarity_matrix(self.A, division_constant=self.division_constant)
+        if self.centrality != 'unguided': 
+            self.similarity_matrix = self.compute_similarity_matrix(self.A, centrality=self.centrality)
 
         super(SymmetryAproximator, self).__init__(state)  # important!
 
 
-    def compute_similarity_matrix(self, A, division_constant):
-        """Input: A - adjacency matrix of a graph. Output: a similarity matrix based on eigenvector centrality of the graph
-        In practice, the output can be any similarity matrix here."""
+    def compute_similarity_matrix(self, A, centrality):
+        """Input: A - adjacency matrix of a graph. Output: a similarity matrix based on the given centrality of the graph.
+        """
         
         G = nx.from_numpy_array(A)
-        eigenvector_centrality = nx.eigenvector_centrality(G, max_iter=1000) # 100 iterations might not be sufficient
-        n = len(eigenvector_centrality)
+        
+        # Choose the division constant based on the centrality, if it is known. Otherwise, use the default value of 1.
+        division_constant = self.constants_for_centralities[centrality][0]
+        
+        match centrality:
+            case 'degree':
+                centrality_values = nx.degree_centrality(G)    
+            case 'closeness':
+                centrality_values = nx.closeness_centrality(G)
+            case 'eigenvector':
+                centrality_values = nx.eigenvector_centrality(G)
+            case 'betweenness':
+                centrality_values = nx.betweenness_centrality(G)
+            case 'pagerank':
+                centrality_values = nx.pagerank(G, alpha=0.85)
+            case 'clustering':
+                centrality_values = nx.clustering(G)
+            case _:
+                centrality_values = nx.degree_centrality(G)
+          
+        n = len(centrality_values)
         diff_matrix = np.zeros((n, n))
+        
         
         # Fill the difference matrix with absolute differences of centralities
         for i in range(n):
             for j in range(n):
-                diff_matrix[i, j] = abs(eigenvector_centrality[i] - eigenvector_centrality[j])
+                diff_matrix[i, j] = abs(centrality_values[i] - centrality_values[j])
         
         # compute the inverse of the distance matrix - create a form of similariy measure.
         # Add a constant to avoid division by zero. The higher the constant, the more even the choices will be
@@ -108,25 +135,27 @@ class SymmetryAproximator(Annealer):
             self.dNeighbor[idb].add(ida)
 
     def check_fp(self, a, b):
-        temp = self.fp
+        temp_fp_var = self.fp
         if a == b:
             return False
         if self.state[a] == a:
-            temp -= 1
+            temp_fp_var -= 1
         if self.state[b] == b:
-            temp -= 1
+            temp_fp_var -= 1
         if self.state[a] == b:
-            temp += 1
+            temp_fp_var += 1
         if self.state[b] == a:
-            temp += 1
-        if temp > self.mfp:
+            temp_fp_var += 1
+        if temp_fp_var > self.mfp:
             return False
         self.lfp = self.fp
-        self.fp = temp
+        self.fp = temp_fp_var
         return True
         
 
-    def move(self):
+    def guided_move(self):
+        """Move to the next state, swapping similar vertices based on the similarity matrix."""
+        probability_constant = self.constants_for_centralities[self.centrality][1]
         a = random.randint(0, len(self.state) - 1) #random choice works significantly better then a choice based on how "bad" the vertex and its image are
         
         
@@ -156,7 +185,7 @@ class SymmetryAproximator(Annealer):
                 
         # choose the second vertex b that will swap images with a using the energy differences as a probability distribution.
         # probability constant is used to avoid division by zero. Also, the higher it is, the more even the choices will be
-        energy_diffs = [max(self.probability_constant, energy_diff) for energy_diff in energy_diffs]
+        energy_diffs = [max(probability_constant, energy_diff) for energy_diff in energy_diffs]
         # Normalize to create a probability distribution
         energy_diffs_probs = np.array(energy_diffs) / sum(energy_diffs)
         
@@ -178,23 +207,50 @@ class SymmetryAproximator(Annealer):
             after = self.diff(ida, aN, idb, bN)
             return (after-initial)/2, a, b
         return 0, a, b
+     
+    def unguided_move(self):
+        """Move to the next state, swapping vertices randomly."""
+        a = random.randint(0, len(self.state) - 1)
+        b = random.randint(0, len(self.state) - 1)
+        
+        # enforce trace(P) = 0
+        # if self.state[a] != b and self.state[b] != a and a != b:
+        if self.check_fp(a,b):
+            # compute initial energy
+            ida, idb = self.state[a], self.state[b]
+            aN, bN = self.dNeighbor[ida], self.dNeighbor[idb]
+            initial = self.diff(ida, aN, idb, bN) 
+            self.rewire(a,b,False)
+            # update permutation
+            self.state[a], self.state[b] = self.state[b], self.state[a]
+            aN, bN = self.dNeighbor[ida], self.dNeighbor[idb]
+            after = self.diff(ida, aN, idb, bN)
 
-# generate permutation without a fixed point
+            return (after-initial)/2, a, b
+
+        return 0, a, b
+
+    def move(self):
+        """Wrapper for the move function. If the centrality is unguided, move randomly. Otherwise, move based on the similarity matrix."""
+        if self.centrality == 'unguided': return self.unguided_move()
+        else: return self.guided_move()
+
 def check(perm):
+    """Check if a permutation has a fixed point."""
     for i, v in enumerate(perm):
         if i == v:
             return True
     return False
 
-def annealing(a, b=None, temp=1, steps=30000, runs=1, fp=0, division_constant = 1, probability_constant = 0.01):
+def annealing(a, b=None, temp=1, steps=30000, runs=1, fp=100, centrality='unguided'):
     best_state, best_energy = None, None
     N = len(a)
     for _ in range(runs): 
         perm = np.random.permutation(N)
-        # only permutations with fixed point
+        # start on a permutation without fixed points (to avoid anomalies)
         while check(perm):
             perm = np.random.permutation(N)
-        SA = SymmetryAproximator(list(perm), a, b, fp, division_constant=division_constant, probability_constant=probability_constant)
+        SA = SymmetryAproximator(list(perm), a, b, fp, centrality=centrality)
         SA.Tmax = temp
         SA.Tmin = 0.01
         SA.steps = steps
@@ -203,4 +259,3 @@ def annealing(a, b=None, temp=1, steps=30000, runs=1, fp=0, division_constant = 
         if best_energy == None or e < best_energy:
             best_state, best_energy = state, e
     return best_state, best_energy/(N*(N-1))*4
-    return best_state, best_energy

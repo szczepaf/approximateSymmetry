@@ -21,7 +21,28 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="annealing\annealing_playground.py" />
+    <Compile Include="annealing\annealing_versions\annealer.py" />
+    <Compile Include="annealing\annealing_versions\sa.py" />
+    <Compile Include="annealing\annealing_versions\sa_eigenvector.py" />
+    <Compile Include="annealing\example_of_running_sa_on_large_BA_graphs.py" />
+    <Compile Include="annealing\runtime_analysis\examining_vertex_mappings.py" />
     <Compile Include="approximateSymmetryProject.py" />
+    <Compile Include="automorphisms\BA_automorphisms\plot_BA_automorphisms.py" />
+    <Compile Include="centralities\examining_centralities_distributions.py" />
+    <Compile Include="centralities\plot_eccentricity_in_BA.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="annealing\annealing_versions\" />
+    <Folder Include="annealing\runtime_analysis\" />
+    <Folder Include="automorphisms\BA_automorphisms\" />
+    <Folder Include="centralities\" />
+    <Folder Include="automorphisms\" />
+    <Folder Include="measurements\" />
+    <Folder Include="annealing\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="automorphisms\BA_automorphisms\BA_automorphisms.csv" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
